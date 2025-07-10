@@ -1,7 +1,8 @@
 package com.example.android_vio.ui.screens
 
+import android.view.SurfaceView
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -13,16 +14,19 @@ import androidx.compose.ui.unit.dp
 fun SensorViewer(
     accelerometerData: String,
     gyroscopeData: String,
-    magnetometerData: String
+    magnetometerData: String,
+    previewView: SurfaceView,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = modifier
     ) {
         CameraPreview(
+            previewView = previewView,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .aspectRatio(1f / 1f)
         )
 
         IMUDataScreen(
@@ -32,7 +36,7 @@ fun SensorViewer(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(10.dp)
         )
     }
 }

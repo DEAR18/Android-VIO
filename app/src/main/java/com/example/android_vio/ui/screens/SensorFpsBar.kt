@@ -14,7 +14,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun SensorFpsBar(imuFps: Double, cameraFps: Double, modifier: Modifier = Modifier) {
+fun SensorFpsBar(
+    imuFps: Double,
+    cameraFps: Double,
+    modifier: Modifier = Modifier
+) {
     Surface(
         modifier = modifier
             .fillMaxWidth()
