@@ -3,10 +3,7 @@ package com.example.android_vio
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
+
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -53,8 +50,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.android_vio.data.DataRecorder
 import com.example.android_vio.data.ImageSaver
-import com.example.android_vio.data.ImuData
-import com.example.android_vio.data.MagnetometerData
+
 import com.example.android_vio.ui.screens.PermissionRequestScreen
 import com.example.android_vio.ui.screens.SensorFpsBar
 import com.example.android_vio.ui.screens.SensorViewer
@@ -63,20 +59,9 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
-import android.os.Looper
 
 
-interface ImuProcessingCallback {
-    fun onProcessedImuData(
-        timestamp: Long,
-        procX: Float,
-        procY: Float,
-        procZ: Float
-    )
-}
-
-class MainActivity : ComponentActivity(), SensorEventListener,
-    ImuProcessingCallback {
+class MainActivity : ComponentActivity() {
     companion object {
         init {
             System.loadLibrary("android-vio-native")
@@ -95,32 +80,17 @@ class MainActivity : ComponentActivity(), SensorEventListener,
         gyroX: Float, gyroY: Float, gyroZ: Float
     )
 
-    private external fun nativeSetOutputCallback(callback: ImuProcessingCallback)
+    private external fun nativeSetOutputCallback(callback: ImuManager.ImuProcessingCallback)
 
-    private lateinit var sensorManager: SensorManager
-    private var accelerometer: Sensor? = null
-    private var gyroscope: Sensor? = null
-    private var magnetometer: Sensor? = null
-    private var accelerometerData by mutableStateOf("Accelerometer: Null")
-    private var gyroscopeData by mutableStateOf("Gyroscope: Null")
-    private var magnetometerData by mutableStateOf("Magnetometer: Null")
+    // IMU Manager
+    private lateinit var imuManager: ImuManager
 
     private var hasIMUPermission by mutableStateOf(false)
     private var hasCamPermission by mutableStateOf(false)
     private var hasStoragePermission by mutableStateOf(false)
 
-    private var gyroTimestamp: Long by mutableStateOf(0)
-    private var accTimestamp: Long by mutableStateOf(0)
     private var camTimestamp: Long by mutableStateOf(0)
-    private var imuFps: Double by mutableStateOf(0.0)
     private var camFps: Double by mutableStateOf(0.0)
-
-    private var imuSamplePeriod = 10_000 // 10ms
-    private var imuDataBuffer = ImuData(0, 0f, 0f, 0f, 0f, 0f, 0f)
-    private var magnetometerDataBuffer = MagnetometerData(0, 0f, 0f, 0f)
-
-    private val imuUiHandler = Handler(Looper.getMainLooper())
-    private var imuUiUpdateRunnable: Runnable? = null
 
     private var isRecording by mutableStateOf(false)
     private lateinit var dataRecorder: DataRecorder
@@ -216,15 +186,10 @@ class MainActivity : ComponentActivity(), SensorEventListener,
         cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
         startBackgroundThread()
 
-        sensorManager =
-            getSystemService(SENSOR_SERVICE) as SensorManager
         hasIMUPermission = ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.BODY_SENSORS
         ) == PackageManager.PERMISSION_GRANTED
-        if (hasIMUPermission) {
-            initializeBodySensor()
-        }
         hasCamPermission = ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.CAMERA
@@ -232,7 +197,6 @@ class MainActivity : ComponentActivity(), SensorEventListener,
         hasStoragePermission = checkStoragePermission()
 
         nativeInitProcessor()
-        nativeSetOutputCallback(this)
 
         // Setup Lifecycle Observer for Native Processor and resources cleanup
         lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -254,6 +218,7 @@ class MainActivity : ComponentActivity(), SensorEventListener,
                 closeCamera()
                 stopBackgroundThread()
                 dataRecorder.stopRecording()
+                imuManager.cleanup()
                 fileIoExecutor.shutdown() // Shut down the file I/O executor
                 Log.d(TAG, "Cleaned up all resources.")
             }
@@ -274,17 +239,34 @@ class MainActivity : ComponentActivity(), SensorEventListener,
                     )
                 }
 
+                // Initialize IMU Manager
+                imuManager = remember {
+                    ImuManager(
+                        context = context, 
+                        dataRecorder = dataRecorder,
+                        nativeReceiveImuData = ::nativeReceiveImuData
+                    ).apply {
+                        initialize()
+                        // Set native callback
+                        nativeSetOutputCallback(object : ImuManager.ImuProcessingCallback {
+                            override fun onProcessedImuData(
+                                timestamp: Long,
+                                procX: Float,
+                                procY: Float,
+                                procZ: Float
+                            ) {
+                                onProcessedImuData(timestamp, procX, procY, procZ)
+                            }
+                        })
+                    }
+                }
+
                 val imuPermissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
                 ) { isGranted: Boolean ->
                     hasIMUPermission = isGranted
                     if (isGranted) {
-                        initializeBodySensor()
-                        registerSensorListeners() // Register after permission granted
-                    } else {
-                        accelerometerData = "Accelerometer: Permission denied"
-                        gyroscopeData = "Gyroscope: Permission denied"
-                        magnetometerData = "Magnetometer: Permission denied"
+                        imuManager.registerSensorListeners() // Register after permission granted
                     }
                 }
 
@@ -329,7 +311,7 @@ class MainActivity : ComponentActivity(), SensorEventListener,
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
                         SensorFpsBar(
-                            imuFps = imuFps,
+                            imuFps = imuManager.imuFps,
                             cameraFps = camFps,
                             modifier = Modifier.systemBarsPadding()
                         )
@@ -446,9 +428,9 @@ class MainActivity : ComponentActivity(), SensorEventListener,
                                     .padding(innerPadding)
                             ) {
                                 SensorViewer(
-                                    accelerometerData = accelerometerData,
-                                    gyroscopeData = gyroscopeData,
-                                    magnetometerData = magnetometerData,
+                                    accelerometerData = imuManager.accelerometerData,
+                                    gyroscopeData = imuManager.gyroscopeData,
+                                    magnetometerData = imuManager.magnetometerData,
                                     previewView = surfaceView,
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -471,9 +453,13 @@ class MainActivity : ComponentActivity(), SensorEventListener,
                             }
 
                             DisposableEffect(Unit) {
-                                registerSensorListeners()
+                                if (hasIMUPermission) {
+                                    imuManager.registerSensorListeners()
+                                    imuManager.startUiUpdates()
+                                }
                                 onDispose {
-                                    sensorManager.unregisterListener(this@MainActivity)
+                                    imuManager.unregisterSensorListeners()
+                                    imuManager.stopUiUpdates()
                                 }
                             }
                         }
@@ -481,12 +467,10 @@ class MainActivity : ComponentActivity(), SensorEventListener,
                 }
             }
         }
-        startImuUiUpdate()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        stopImuUiUpdate()
     }
 
     // --- Camera2 API Implementation ---
@@ -778,133 +762,13 @@ class MainActivity : ComponentActivity(), SensorEventListener,
         }
     }
 
-    private fun initializeBodySensor() {
-        accelerometer =
-            sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        magnetometer =
-            sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-
-        if (accelerometer == null) accelerometerData =
-            "Accelerometer: Not available on this device"
-        if (gyroscope == null) gyroscopeData =
-            "Gyroscope: Not available on this device"
-        if (magnetometer == null) magnetometerData =
-            "Magnetometer: Not available on this device"
-    }
-
-    private fun registerSensorListeners() {
-        if (!hasIMUPermission) {
-            return
-        }
-        accelerometer?.let {
-            sensorManager.registerListener(
-                this,
-                it,
-                imuSamplePeriod
-            )
-        }
-        gyroscope?.let {
-            sensorManager.registerListener(
-                this,
-                it,
-                imuSamplePeriod
-            )
-        }
-        magnetometer?.let {
-            sensorManager.registerListener(
-                this,
-                it,
-                SensorManager.SENSOR_DELAY_GAME
-            )
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // Not used for this example
-    }
-
-    override fun onSensorChanged(event: SensorEvent?) {
-        event?.let {
-            when (it.sensor.type) {
-                Sensor.TYPE_ACCELEROMETER -> {
-                    val deltaT = it.timestamp - accTimestamp
-                    if (accTimestamp != 0L && deltaT > 0) {
-                        imuFps = 1.0 / (deltaT.toDouble() / 1_000_000_000)
-                    }
-                    accTimestamp = it.timestamp
-
-                    imuDataBuffer.timestamp = accTimestamp
-                    imuDataBuffer.accX = it.values[0]
-                    imuDataBuffer.accY = it.values[1]
-                    imuDataBuffer.accZ = it.values[2]
-
-                    nativeReceiveImuData(
-                        imuDataBuffer.timestamp,
-                        imuDataBuffer.accX,
-                        imuDataBuffer.accY,
-                        imuDataBuffer.accZ,
-                        imuDataBuffer.gyroX,
-                        imuDataBuffer.gyroY,
-                        imuDataBuffer.gyroZ
-                    )
-
-                    dataRecorder.logImuData(imuDataBuffer)
-                }
-
-                Sensor.TYPE_GYROSCOPE -> {
-                    gyroTimestamp = it.timestamp
-                    imuDataBuffer.gyroX = it.values[0]
-                    imuDataBuffer.gyroY = it.values[1]
-                    imuDataBuffer.gyroZ = it.values[2]
-                }
-
-                Sensor.TYPE_MAGNETIC_FIELD -> {
-                    magnetometerDataBuffer.timestamp = it.timestamp
-                    magnetometerDataBuffer.x = it.values[0]
-                    magnetometerDataBuffer.y = it.values[1]
-                    magnetometerDataBuffer.z = it.values[2]
-                }
-            }
-        }
-    }
-
-    override fun onProcessedImuData(
+    private fun onProcessedImuData(
         timestamp: Long,
         procX: Float,
         procY: Float,
         procZ: Float
     ) {
-//        accelerometerData =
-//            "Acc: X=${"%.2f".format(procX)}, Y=${"%.2f".format(procY)}, Z=${
-//                "%.2f".format(
-//                    procZ
-//                )
-//            }"
-    }
-
-    private fun startImuUiUpdate() {
-        imuUiUpdateRunnable = object : Runnable {
-            override fun run() {
-                accelerometerData =
-                    "Acc: X=${"%.2f".format(imuDataBuffer.accX)}, Y=${
-                        "%.2f".format(imuDataBuffer.accY)
-                    }, Z=${"%.2f".format(imuDataBuffer.accZ)}"
-                gyroscopeData =
-                    "Gyro: X=${"%.2f".format(imuDataBuffer.gyroX)}, Y=${
-                        "%.2f".format(imuDataBuffer.gyroY)
-                    }, Z=${"%.2f".format(imuDataBuffer.gyroZ)}"
-                magnetometerData =
-                    "Mag: X=${"%.2f".format(magnetometerDataBuffer.x)}, Y=${
-                        "%.2f".format(magnetometerDataBuffer.y)
-                    }, Z=${"%.2f".format(magnetometerDataBuffer.z)}"
-                imuUiHandler.postDelayed(this, 1000)
-            }
-        }
-        imuUiHandler.post(imuUiUpdateRunnable!!)
-    }
-
-    private fun stopImuUiUpdate() {
-        imuUiUpdateRunnable?.let { imuUiHandler.removeCallbacks(it) }
+        // Handle processed IMU data from native processor
+        imuManager.onProcessedImuData(timestamp, procX, procY, procZ)
     }
 }
