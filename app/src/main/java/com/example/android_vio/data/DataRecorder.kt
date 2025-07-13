@@ -1,7 +1,10 @@
 package com.example.android_vio.data
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.Image
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -9,6 +12,7 @@ import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileWriter
@@ -69,12 +73,57 @@ class DataRecorder(
     // Internal state indicating whether recording is currently active
     var isRecordingInternal by mutableStateOf(false) // Changed to var and public for MainActivity to read
 
+    // Permission state
+    var hasStoragePermission: Boolean by mutableStateOf(false)
+        private set
+
     // File writers for logging, access is managed via methods using the executor
     private var imuLogFileWriter: FileWriter? = null
     private var imageLogFileWriter: FileWriter? = null
 
     // Output directory for recorded data
     lateinit var outputDirectory: File
+
+    init {
+        checkStoragePermission()
+    }
+
+    /**
+     * Check if storage permission is granted
+     */
+    fun checkStoragePermission(): Boolean {
+        hasStoragePermission =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_MEDIA_IMAGES
+                ) == PackageManager.PERMISSION_GRANTED &&
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.READ_MEDIA_VIDEO
+                        ) == PackageManager.PERMISSION_GRANTED
+            } else if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) { // Android 9 (API 28) and below
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                // Android 10 (API 29) - 12 (API 32): Scoped Storage.
+                // getExternalFilesDir() does not require WRITE_EXTERNAL_STORAGE permission.
+                true
+            }
+        return hasStoragePermission
+    }
+
+    /**
+     * Update permission status (should be called from permission result)
+     */
+    fun updatePermissionStatus(granted: Boolean) {
+        hasStoragePermission = granted
+        if (!granted && isRecordingInternal) {
+            stopRecording()
+        }
+    }
 
     /**
      * Toggles the recording state (starts or stops recording).
@@ -91,6 +140,21 @@ class DataRecorder(
      * Starts data recording.
      */
     private fun startRecording() {
+        if (!hasStoragePermission) {
+            Log.w(
+                TAG,
+                "Storage permission not granted, cannot start recording."
+            )
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(
+                    context,
+                    "Storage permission required for recording",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            return
+        }
+
         try {
             // Create a session directory named with the current timestamp
             val sessionDirName =

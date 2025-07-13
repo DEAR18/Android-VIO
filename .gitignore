@@ -1,3 +1,4 @@
+# Android Studio
 *.iml
 .gradle
 /local.properties
@@ -12,4 +13,54 @@
 /captures
 .externalNativeBuild
 .cxx
+local.properties
+
+# Android/IntelliJ
+.idea/
+*.ipr
+*.iws
+*.bak
+*.swp
+*.swo
+*.swn
+*.tmp
+*.temp
+*.orig
+*.rej
+*.log
+*.db
+
+# Build outputs
+*.apk
+*.ap_
+*.dex
+*.class
+*.jar
+*.war
+*.ear
+output/
+bin/
+gen/
+
+# Keystore files
+*.keystore
+
+# Crash reports
+*.hprof
+
+# Misc
+captures/
+
+# MacOS
+.DS_Store
+
+# Gradle
+.gradle/
+build/
+
+# External native build
+.externalNativeBuild/
+.cxx/
+
+# Local properties
 local.properties

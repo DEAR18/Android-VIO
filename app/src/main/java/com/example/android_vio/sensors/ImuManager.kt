@@ -1,6 +1,8 @@
-package com.example.android_vio
+package com.example.android_vio.sensors
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -10,6 +12,7 @@ import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import com.example.android_vio.data.DataRecorder
 import com.example.android_vio.data.ImuData
 import com.example.android_vio.data.MagnetometerData
@@ -50,6 +53,10 @@ class ImuManager(
     var imuFps: Double by mutableStateOf(0.0)
         private set
 
+    // Permission state
+    var hasPermission: Boolean by mutableStateOf(false)
+        private set
+
     // IMU configuration
     private val imuSamplePeriod = 10_000 // 10ms
     private var imuDataBuffer = ImuData(0, 0f, 0f, 0f, 0f, 0f, 0f)
@@ -75,27 +82,63 @@ class ImuManager(
      * Initialize the IMU manager with sensor services
      */
     fun initialize() {
-        sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager =
+            context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        checkPermission()
         initializeBodySensors()
+    }
+
+    /**
+     * Check if IMU permission is granted
+     */
+    fun checkPermission(): Boolean {
+        hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.BODY_SENSORS
+        ) == PackageManager.PERMISSION_GRANTED
+        return hasPermission
+    }
+
+    /**
+     * Update permission status (should be called from permission result)
+     */
+    fun updatePermissionStatus(granted: Boolean) {
+        hasPermission = granted
+        if (granted) {
+            registerSensorListeners()
+        } else {
+            unregisterSensorListeners()
+            accelerometerData = "Accelerometer: Permission denied"
+            gyroscopeData = "Gyroscope: Permission denied"
+            magnetometerData = "Magnetometer: Permission denied"
+        }
     }
 
     /**
      * Initialize individual body sensors
      */
     private fun initializeBodySensors() {
-        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        accelerometer =
+            sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        magnetometer =
+            sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
-        if (accelerometer == null) accelerometerData = "Accelerometer: Not available on this device"
-        if (gyroscope == null) gyroscopeData = "Gyroscope: Not available on this device"
-        if (magnetometer == null) magnetometerData = "Magnetometer: Not available on this device"
+        if (accelerometer == null) accelerometerData =
+            "Accelerometer: Not available on this device"
+        if (gyroscope == null) gyroscopeData =
+            "Gyroscope: Not available on this device"
+        if (magnetometer == null) magnetometerData =
+            "Magnetometer: Not available on this device"
     }
 
     /**
      * Register sensor listeners to start receiving sensor data
      */
     fun registerSensorListeners() {
+        if (!hasPermission) {
+            return
+        }
         accelerometer?.let {
             sensorManager.registerListener(this, it, imuSamplePeriod)
         }
@@ -103,7 +146,11 @@ class ImuManager(
             sensorManager.registerListener(this, it, imuSamplePeriod)
         }
         magnetometer?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+            sensorManager.registerListener(
+                this,
+                it,
+                SensorManager.SENSOR_DELAY_GAME
+            )
         }
     }
 
@@ -120,15 +167,18 @@ class ImuManager(
     fun startUiUpdates() {
         imuUiUpdateRunnable = object : Runnable {
             override fun run() {
-                accelerometerData = "Acc: X=${"%.2f".format(imuDataBuffer.accX)}, Y=${
-                    "%.2f".format(imuDataBuffer.accY)
-                }, Z=${"%.2f".format(imuDataBuffer.accZ)}"
-                gyroscopeData = "Gyro: X=${"%.2f".format(imuDataBuffer.gyroX)}, Y=${
-                    "%.2f".format(imuDataBuffer.gyroY)
-                }, Z=${"%.2f".format(imuDataBuffer.gyroZ)}"
-                magnetometerData = "Mag: X=${"%.2f".format(magnetometerDataBuffer.x)}, Y=${
-                    "%.2f".format(magnetometerDataBuffer.y)
-                }, Z=${"%.2f".format(magnetometerDataBuffer.z)}"
+                accelerometerData =
+                    "Acc: X=${"%.2f".format(imuDataBuffer.accX)}, Y=${
+                        "%.2f".format(imuDataBuffer.accY)
+                    }, Z=${"%.2f".format(imuDataBuffer.accZ)}"
+                gyroscopeData =
+                    "Gyro: X=${"%.2f".format(imuDataBuffer.gyroX)}, Y=${
+                        "%.2f".format(imuDataBuffer.gyroY)
+                    }, Z=${"%.2f".format(imuDataBuffer.gyroZ)}"
+                magnetometerData =
+                    "Mag: X=${"%.2f".format(magnetometerDataBuffer.x)}, Y=${
+                        "%.2f".format(magnetometerDataBuffer.y)
+                    }, Z=${"%.2f".format(magnetometerDataBuffer.z)}"
                 imuUiHandler.postDelayed(this, 1000)
             }
         }
@@ -157,7 +207,8 @@ class ImuManager(
     /**
      * Get the current magnetometer data buffer for external access
      */
-    fun getCurrentMagnetometerData(): MagnetometerData = magnetometerDataBuffer.copy()
+    fun getCurrentMagnetometerData(): MagnetometerData =
+        magnetometerDataBuffer.copy()
 
     // SensorEventListener implementation
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
